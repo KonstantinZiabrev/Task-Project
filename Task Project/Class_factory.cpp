@@ -48,7 +48,7 @@ IFACEMETHODIMP Class_factory::CreateInstance(IUnknown *pUnkOuter, REFIID riid, v
 		hr = E_OUTOFMEMORY;
 	}
 
-	Com_component* component = new  Com_component();
+	Com_component* component = new  (std::nothrow) Com_component();
 	if (component) {
 		hr = component->QueryInterface(riid, ppv);
 		component->Release();
