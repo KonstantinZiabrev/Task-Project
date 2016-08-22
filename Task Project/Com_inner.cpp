@@ -1,6 +1,11 @@
 #include "Com_inner.h"
 
-#include <assert.h>
+#include <ctime>
+#include <boost/bind.hpp>
+#include <boost/thread/thread.hpp>
+#include <boost/filesystem/fstream.hpp>
+#include <boost/ref.hpp>
+#include <cstdint>
 
 static std::wstring to_read_size(int64_t size) {
 	int i = 0;
@@ -12,84 +17,74 @@ static std::wstring to_read_size(int64_t size) {
 	return std::wstring(std::to_wstring(size) + units[i]);
 }
 
-static std::wstring to_read_date(const FILETIME& filetime) {
-	SYSTEMTIME helper;
-	FileTimeToSystemTime(&filetime, &helper);
-	std::wstring answer;
-	answer += std::to_wstring(helper.wYear) + L"-" + std::to_wstring(helper.wMonth) + L"-" + std::to_wstring(helper.wDay) + L"T"
-		+ std::to_wstring(helper.wHour) + L"-" + std::to_wstring(helper.wMinute) + L"-" + std::to_wstring(helper.wSecond);
-	return answer;
-}
-
-void CALLBACK worker_func(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work) {
-	Com_inner* com_inner = static_cast<Com_inner*>(Context);
-	com_inner->process_record();
+static std::wstring to_read_date(const boost::filesystem::path& file) {
+	std::time_t int_time = boost::filesystem::last_write_time(file);
+	std::tm date;
+	localtime_s(&date, &int_time);
+	wchar_t buffer[64];
+	std::wcsftime(buffer, 32, L"%a, %d.%m.%Y %H:%M:%S", &date);
+	return std::wstring(buffer);
 }
 
 Com_inner::Com_inner() {
-	InitializeCriticalSectionAndSpinCount(&_cs, 0x00000400);
-	_pool_pointer = CreateThreadpoolWork(&worker_func, static_cast<void*>(this), NULL);
+
 }
 
 Com_inner::~Com_inner() {
-	CloseThreadpoolWork(_pool_pointer);
+	
 }
 
 void Com_inner::add_filename(const wchar_t* filename) {
-	_records[std::wstring(filename)] = std::wstring();
+	boost::filesystem::path helper(filename);
+	boost::filesystem::path short_name = helper.filename();
+	_records[short_name.wstring()] = std::make_pair(helper, std::wstring());
 }
 
 void Com_inner::reset() {
 	_records.clear();
-	_error_occured = false;
 }
 
-std::wstring Com_inner::compose_answer() const{
+bool Com_inner::do_answer(const std::wstring& filename){
+	records_processing();
 	std::wstring answer;
 	for (const auto& iter : _records) {
-		answer += iter.first + L" " + iter.second + L"\n";
+		answer += iter.first + L" " + iter.second.second + L"\n";
 	}
-	return answer;
+	boost::filesystem::fstream output_file(filename, boost::filesystem::fstream::out| boost::filesystem::fstream::app);
+	if (!output_file.is_open()) {
+		return false;
+	}
+	output_file << answer;
+	output_file.close();
+	return true;
 }
 
-bool Com_inner::records_processing() {
-	_pending_record = _records.begin();
-	for (unsigned i = 0; i < _records.size(); ++i) {
-		SubmitThreadpoolWork(_pool_pointer);
+void Com_inner::records_processing() {
+	boost::thread_group thread_pool;
+	//Adds work to thread pool
+	for (auto& iter : _records) {
+		_service.post(boost::bind(&Com_inner::process_record, this, boost::ref(iter.second)));
 	}
-	WaitForThreadpoolWorkCallbacks(_pool_pointer, false);
-	return !(_error_occured);
+	//Creates thread for thread pool
+	for (unsigned i = 1; i < boost::thread::hardware_concurrency(); ++i) {
+		thread_pool.create_thread(boost::bind(&boost::asio::io_service::run, &_service));
+	}
+	//Run thread pool works
+	_service.run();
+	//Waits until thread pool finished its works
+	thread_pool.join_all();
+	return;
 }
 
-void Com_inner::process_record() {
-	EnterCriticalSection(&_cs);
-	auto iter = _pending_record;
-	++_pending_record;
-	LeaveCriticalSection(&_cs);
-	HANDLE handle = CreateFile(iter->first.c_str(), GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
-	if (handle == INVALID_HANDLE_VALUE) {
-		EnterCriticalSection(&_cs);
-		_error_occured = true;
-		LeaveCriticalSection(&_cs);
+void Com_inner::process_record(Value_pair& pair) {
+	boost::filesystem::fstream file (pair.first, boost::filesystem::fstream::in | boost::filesystem::fstream::binary);
+	uint32_t sum = 0;
+	while (file) {
+		uint8_t helper;
+		file.read(reinterpret_cast<char*>(&helper), 1);
+		sum += helper;
 	}
-	unsigned char buffer[BUFFER_SIZE];
-	memset(buffer, 0, BUFFER_SIZE);
-	__int32 checksum = 0;
-	while (true) {
-		unsigned long bytes_read;
-		ReadFile(handle, buffer, BUFFER_SIZE, &bytes_read, NULL);
-		if (bytes_read == 0) {
-			break;
-		}
-		for (unsigned i = 0; i < bytes_read; ++i) {
-			checksum += buffer[i];
-		}
-	}
-	LARGE_INTEGER file_size;
-	GetFileSizeEx(handle, &file_size);
-	FILETIME creation_time;
-	GetFileTime(handle, &creation_time, NULL, NULL);
-	CloseHandle(handle);
-	iter->second += L" " + to_read_size(file_size.QuadPart) + L" " + to_read_date(creation_time) + L" checksum " + std::to_wstring(checksum);
+	file.close();
+	pair.second = to_read_size(boost::filesystem::file_size(pair.first)) + L" " + to_read_date(pair.first) + L" bytesum " + std::to_wstring(sum);
 }
 

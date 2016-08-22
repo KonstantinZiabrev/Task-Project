@@ -1,8 +1,11 @@
 #pragma once
 
-#include <windows.h>
 #include <string>
 #include <map>
+#include <boost/filesystem.hpp>
+#include <boost/asio/io_service.hpp>
+#include "Defines.h"
+
 
 static const unsigned BUFFER_SIZE = 1024;
 
@@ -21,18 +24,17 @@ public:
 	void reset();
 
 	//Composing final answer for message Box
-	std::wstring compose_answer() const;
+	bool do_answer(const std::wstring& filename);
 
 	//Adding dates, sizes etc
 	//Return the success of processing
-	bool records_processing();
+	void records_processing();
 private:
-	//Process 
-	virtual void process_record();
-	std::map<const std::wstring, std::wstring> _records;
-	CRITICAL_SECTION _cs;
-	PTP_WORK _pool_pointer;
-	decltype(_records)::iterator  _pending_record;
-	bool _error_occured;
-	
+	using Value_pair = std::pair<boost::filesystem::path, std::wstring>;
+	//map<short_filename,<full_path, file_info>>
+	std::map<const std::wstring, Value_pair> _records;
+	//For thread pool
+	boost::asio::io_service _service;	
+
+	virtual void process_record(Value_pair& pair);
 };

@@ -76,10 +76,9 @@ IFACEMETHODIMP Com_component::Initialize(
 
 		ReleaseStgMedium(&stm);
 	}
-	
-	if (hr != E_FAIL && _com_inner.records_processing() == false) {
+	/*if (hr != E_FAIL && _com_inner.records_processing() == false) {
 		hr = E_FAIL;
-	}
+	}*/
 	return hr;
 }
 
@@ -122,9 +121,9 @@ IFACEMETHODIMP Com_component::InvokeCommand(LPCMINVOKECOMMANDINFO pCmdInfo)
 	case 0:
 	{
 
-
-		MessageBox(pCmdInfo->hwnd, _com_inner.compose_answer().c_str(), L"SimpleShlExt", MB_ICONINFORMATION);
-
+		if (!_com_inner.do_answer(FULL_ANSWER_FILE_PATH)) {
+			MessageBox(pCmdInfo->hwnd, L" Cannot open answer_file", L"SimpleShlExt", MB_ICONINFORMATION);
+		}
 		return S_OK;
 	}
 	break;

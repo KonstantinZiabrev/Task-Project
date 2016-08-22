@@ -1,3 +1,6 @@
+//WinSock2.h included as first in every translation unit for compatibility issue
+//http://stackoverflow.com/a/23294767
+#include <WinSock2.h>
 #include <windows.h>
 #include <Guiddef.h>
 #include <string>
